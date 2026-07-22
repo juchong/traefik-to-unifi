@@ -209,6 +209,9 @@ class TraefikToUnifi:
         if not traefik_domains_json_changed:
             if self.number_of_syncs_without_change < self.full_sync_interval:
                 logging.info("Skipping UniFi update due to no changes.")
+                # Still refresh the output file so its last_updated timestamp
+                # reflects that the sync loop is alive and current.
+                self.write_dns_entries_to_file(traefik_domains)
                 return
 
             # reset counter and do full sync
