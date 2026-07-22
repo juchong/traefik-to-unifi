@@ -35,6 +35,23 @@ services:
       # === DNS Output File ===
       # Write synced entries to JSON file for auditing
       - DNS_OUTPUT_FILE=/data/dns-entries.json
+
+      # === Prune / Sync Mode (opt-in; only deletes entries this tool created) ===
+      # Requires DOCKER_FILTER_LABEL. Start with DRY_RUN=true to preview deletes.
+      - UNIFI_DNS_PRUNE=false
+      - DRY_RUN=false
+      - PRUNE_GRACE_CYCLES=3
+      # - PRUNE_LABEL=traefik.unifi-dns.prune   # default: <DOCKER_FILTER_LABEL>.prune
+      - DNS_STATE_FILE=/data/dns-state.json
+
+      # === Read-only Web UI + file logging (all sourced from /data) ===
+      - WEB_UI_ENABLED=false
+      - WEB_UI_PORT=8080
+      - LOG_FILE=/data/traefik-to-unifi.log
+      - SYNC_HISTORY_FILE=/data/sync-history.jsonl
+    # Uncomment to expose the read-only UI when WEB_UI_ENABLED=true:
+    # ports:
+    #   - "8080:8080"
     networks:
       - traefik
 

@@ -134,6 +134,95 @@ environment:
   - DOCKER_FILTER_VALUE=true
 ```
 
+### Prune / Sync Mode (Optional):
+
+By default the app only **adds and updates** DNS entries; removing a container
+leaves an orphan record in UniFi. Prune mode deletes those stale entries so
+UniFi DNS stays in sync as you stand projects up and tear them down.
+
+**Safety is the priority — the app only ever deletes entries it created:**
+
+- Prune requires `DOCKER_FILTER_LABEL` (ownership is tracked via the Docker
+  label scan). It refuses to start otherwise.
+- A persistent **ownership ledger** (`DNS_STATE_FILE`, two buckets) records
+  exactly the hosts this tool POSTed. Manual UniFi entries never enter the
+  `managed` bucket, so they are **never** prune-eligible — they only surface
+  under `unmanaged` for your review.
+- A host is deleted only after it is absent for `PRUNE_GRACE_CYCLES` consecutive
+  syncs (absorbs container restarts/redeploys).
+- Before deleting, the entry is re-checked against UniFi (value + type must
+  still match ours); after deleting, a fresh fetch confirms it is gone before
+  the ledger drops it. If UniFi drifted or was adopted manually, the entry is
+  **released** (moved to `unmanaged`) instead of deleted.
+- If the Docker query fails on a cycle (ownership unknowable), pruning is
+  **skipped** entirely for that cycle; add/update still runs.
+
+Prune environment variables:
+
+- `UNIFI_DNS_PRUNE`: Set to `true` to enable delete mode. Defaults to `false`.
+- `PRUNE_GRACE_CYCLES`: Consecutive absent syncs before deletion. Defaults to `3`.
+- `DRY_RUN`: Set to `true` to log intended deletes without executing any. Defaults to `false`.
+- `PRUNE_LABEL`: Per-container opt-out label. Defaults to `<DOCKER_FILTER_LABEL>.prune` (e.g. `traefik.unifi-dns.prune`).
+- `DNS_STATE_FILE`: Path to the ownership ledger. Defaults to `/data/dns-state.json`.
+
+**Per-container opt-out:** set the prune label to `false` to keep a host's entry
+even after its container is removed (the entry moves to `unmanaged`). When
+multiple containers share a hostname, opt-out wins.
+
+```yaml
+labels:
+  - traefik.enable=true
+  - traefik.http.routers.keep.rule=Host(`keep.example.com`)
+  - traefik.unifi-dns=true
+  - traefik.unifi-dns.prune=false  # ← never delete this entry
+```
+
+The ledger (`DNS_STATE_FILE`) makes ownership auditable:
+
+```json
+{
+  "managed": {
+    "app.example.com": { "value": "10.0.10.50", "record_type": "A",
+                         "prune_eligible": true, "missing_count": 0 }
+  },
+  "unmanaged": {
+    "legacy.example.com": { "value": "10.0.10.50", "record_type": "A",
+                            "reason": "not-created-by-us", "first_seen": "2026-07-21T..." }
+  }
+}
+```
+
+`reason` is one of `not-created-by-us` (manual/pre-existing), `value-drift`
+(we created it but the value was changed outside the tool), or
+`opted-out-orphan` (prune=false container removed).
+
+### Read-only Web UI & File Logging (Optional):
+
+An optional read-only web page renders the DNS map (managed + unmanaged),
+recent sync history, and a tail of the log — all from files in `/data`, so it
+needs no Docker socket or root to view. It runs in a daemon thread using only
+the Python standard library (no extra dependencies) and is **GET-only** (any
+other method returns `405`).
+
+Routes: `/` (HTML dashboard), `/api/state`, `/api/history`, `/api/log`,
+`/healthz` (readiness based on the last sync timestamp — usable as a container
+healthcheck).
+
+Web UI / logging environment variables:
+
+- `WEB_UI_ENABLED`: Set to `true` to start the UI. Defaults to `false`.
+- `WEB_UI_PORT`: Listen port. Defaults to `8080`.
+- `WEB_UI_BIND`: Bind address. Defaults to `0.0.0.0`.
+- `WEB_UI_LOG_TAIL`: Lines of log to show/serve. Defaults to `200`.
+- `WEB_UI_LIVENESS_MAX_AGE`: Seconds since last sync before `/healthz` reports stale. Defaults to `300`.
+- `LOG_FILE`: Plain-text log path (rotating). Defaults to `/data/traefik-to-unifi.log`. Set empty to disable.
+- `LOG_FILE_MAX_BYTES` / `LOG_FILE_BACKUPS`: Rotation size/backups. Default `1000000` / `3`.
+- `SYNC_HISTORY_FILE`: Per-sync JSON-lines history. Defaults to `/data/sync-history.jsonl`.
+- `SYNC_HISTORY_MAX`: Records to retain. Defaults to `200`.
+
+All web UI / logging / prune state lives under `/data`, so mount a volume for
+persistence (see the `DNS_OUTPUT_FILE` note above).
+
 ## Usage
 
 ### 1. Using a published image
